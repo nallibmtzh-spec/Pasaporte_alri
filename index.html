@@ -179,7 +179,7 @@ const ADMIN_PASSWORD = 'ALRI-WMWXUQ';
 // Replace this with your own deployment URL before publishing/sharing the
 // page — see setup instructions. GET returns the full dataset; POST
 // performs one write action (register / stamp / adminSaveEvents).
-const API_URL = 'https://script.google.com/macros/s/AKfycbyumxViXqoZ2LIA9_DNupsXr5ktf_TvbCR5CtQEEgt-FqCmp9ebJsLDaU4wDHLFyE27gQ/exec';
+const API_URL = 'REPLACE_WITH_YOUR_WEB_APP_URL';
 
 let DATA = { events: [], users: {}, comments: [] };
 let state = { view:'home', matricula:'', user:null, error:'', adminAuth:false, adminTab:'eventos', loading:true, saving:false, selectedEvent:null };
@@ -348,22 +348,41 @@ function RegisterView(){
     if(!fields.nombre || !fields.correo || !fields.carrera){
       err.textContent = 'Completa al menos nombre, correo y carrera.'; return;
     }
+    // Snapshot the matrícula this specific submission is for, RIGHT NOW.
+    // state.matricula is a shared global — if the student (or, during
+    // testing, whoever's at the keyboard) navigates back and starts a
+    // second registration before this fetch() resolves (Apps Script can
+    // take several seconds per call), state.matricula changes out from
+    // under us. Reading state.matricula again after the await would then
+    // apply THIS response to the WRONG student. Everything below uses
+    // submittedMatricula instead of the live state.matricula.
+    const submittedMatricula = state.matricula;
     submitBtn.textContent = 'Guardando…'; submitBtn.disabled = true;
     const newUser = {
-      matricula: state.matricula,
+      matricula: submittedMatricula,
       nombre: fields.nombre, correo: fields.correo||'', carrera: fields.carrera||'',
       semestre: fields.semestre||'1', edad: fields.edad||'', sexo: fields.sexo||'Prefiero no decirlo',
       badges: []
     };
     try{
-      DATA = await apiPost({ action:'register', user:newUser });
-      state.user = DATA.users[state.matricula];
-      state.view='passport';
-      showToast('¡Registro completo! Bienvenid@ a ALRI.');
-      render();
+      const freshData = await apiPost({ action:'register', user:newUser });
+      DATA = freshData;
+      if(state.matricula === submittedMatricula && state.view === 'register'){
+        // Still the same student, still on this screen — safe to advance.
+        state.user = DATA.users[submittedMatricula];
+        state.view='passport';
+        showToast('¡Registro completo! Bienvenid@ a ALRI.');
+        render();
+      }
+      // Otherwise: the person has already navigated elsewhere (e.g. typed a
+      // new matrícula and moved on). The registration still saved correctly
+      // server-side — we just don't yank them back to a passport view they
+      // didn't ask for. Re-entering their matrícula will show it correctly.
     }catch(err2){
-      err.textContent = 'No se pudo guardar. Revisa tu conexión e intenta de nuevo.';
-      submitBtn.textContent = 'Crear mi pasaporte'; submitBtn.disabled = false;
+      if(state.matricula === submittedMatricula && state.view === 'register'){
+        err.textContent = 'No se pudo guardar. Revisa tu conexión e intenta de nuevo.';
+        submitBtn.textContent = 'Crear mi pasaporte'; submitBtn.disabled = false;
+      }
     }
   }},['Crear mi pasaporte']);
   page.appendChild(submitBtn);
@@ -461,35 +480,48 @@ function AddEventChoice(){
     const submitBtn = el('button',{class:'green', onClick: async ()=>{
       const comment = textarea.value.trim();
       if(!comment){ err.textContent = 'El comentario es obligatorio para recibir tu insignia.'; return; }
+      // Snapshot everything this submission is for, right now — same
+      // reasoning as the registration handler: state.user can change out
+      // from under an in-flight request if someone navigates away before
+      // Apps Script responds (it can take a few seconds per call).
+      const submittedMatricula = state.user.matricula;
+      const submittedNombre = state.user.nombre;
       submitBtn.textContent = 'Guardando…'; submitBtn.disabled = true;
 
       // Stash before sending: if the request fails (network drop, Apps
       // Script cold-start timeout, etc.) we can resume right here with the
       // comment intact instead of losing it.
-      stashPendingStamp(state.user.matricula, ev.id, comment);
+      stashPendingStamp(submittedMatricula, ev.id, comment);
 
       try{
-        DATA = await apiPost({
+        const freshData = await apiPost({
           action:'stamp',
-          matricula: state.user.matricula,
+          matricula: submittedMatricula,
           eventId: ev.id,
           comment: comment,
-          nombre: state.user.nombre,
+          nombre: submittedNombre,
           eventName: ev.name,
           date: new Date().toLocaleDateString('es-MX')
         });
+        DATA = freshData;
         clearPendingStamp();
-        state.user = DATA.users[state.user.matricula];
-        state.selectedEvent = null;
-        state.resumeNotice = null;
-        state.view='passport';
-        showToast('¡Sello de '+ev.name+' agregado! Gracias por tu comentario.');
-        render();
+        if(state.user && state.user.matricula === submittedMatricula && state.view === 'addEvent'){
+          state.user = DATA.users[submittedMatricula];
+          state.selectedEvent = null;
+          state.resumeNotice = null;
+          state.view='passport';
+          showToast('¡Sello de '+ev.name+' agregado! Gracias por tu comentario.');
+          render();
+        }
+        // Otherwise the person already navigated elsewhere; the stamp still
+        // saved correctly server-side, we just don't redirect them.
       }catch(err2){
         // Leave the stash in place — the student can reload or retry and
         // we'll resume them right back on this step with the comment.
-        err.textContent = 'No se pudo guardar. Revisa tu conexión e intenta de nuevo.';
-        submitBtn.textContent = 'Enviar comentario y recibir mi sello'; submitBtn.disabled = false;
+        if(state.user && state.user.matricula === submittedMatricula && state.view === 'addEvent'){
+          err.textContent = 'No se pudo guardar. Revisa tu conexión e intenta de nuevo.';
+          submitBtn.textContent = 'Enviar comentario y recibir mi sello'; submitBtn.disabled = false;
+        }
       }
     }},['Enviar comentario y recibir mi sello']);
     page.appendChild(submitBtn);
