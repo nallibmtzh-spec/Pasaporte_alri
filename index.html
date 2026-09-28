@@ -167,11 +167,21 @@
   .event-img-thumb{width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid var(--paper-line);flex:none;}
   .file-label{font-size:11px;color:var(--blue);display:flex;align-items:center;gap:6px;cursor:pointer;}
   button:disabled{opacity:0.45;cursor:not-allowed;transform:none;}
-  .tab-row{display:flex;gap:8px;margin-bottom:16px;}
-  .tab-row button{margin-top:0;padding:9px;font-size:12px;}
+  .tab-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+  .tab-row button{margin-top:0;padding:9px 6px;font-size:11.5px;flex:1 1 40%;}
   .tab-row button.inactive{background:transparent;color:var(--blue);border:1px solid var(--paper-line);}
   .loading{text-align:center;padding:40px 0;color:var(--ink-soft);font-size:12px;}
   .csv-btn{background:var(--gold);color:var(--ink);}
+  .stat-summary-row{display:flex;gap:10px;margin:4px 0 20px;}
+  .stat-tile{flex:1;background:var(--blue-deep);color:var(--paper);border-radius:6px;padding:12px 6px;text-align:center;}
+  .stat-tile b{display:block;font-family:Georgia,serif;font-size:22px;color:var(--green);line-height:1;}
+  .stat-tile span{display:block;margin-top:5px;font-size:9px;letter-spacing:0.3px;text-transform:uppercase;color:rgba(246,242,231,0.75);line-height:1.3;}
+  .stat-bar-list{display:flex;flex-direction:column;gap:11px;margin-top:8px;}
+  .stat-bar-row{display:flex;align-items:center;gap:8px;}
+  .stat-bar-label{width:34%;flex:none;font-size:11px;line-height:1.25;}
+  .stat-bar-track{flex:1;height:10px;background:var(--paper-line);border-radius:5px;overflow:hidden;}
+  .stat-bar-fill{height:100%;background:var(--blue);border-radius:5px;}
+  .stat-bar-count{width:56px;flex:none;font-size:10.5px;text-align:right;color:var(--ink-soft);}
 </style>
 </head>
 <body>
@@ -184,7 +194,9 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABUYAAAQ4CAYAAADF
 <script>
 const STAMP_COLORS = ["#B4483F","#1B6D8C","#3D7A49","#C6A15B","#7A4B8C","#3D93AC"];
 const EMOJIS = ["🎓","🌍","⚽","📰","🕌","🎭","🛂","🎤","🤝","🏛️","✈️","📚"];
-const ADMIN_PASSWORD = 'ALRI-WMWXUQ';
+// The admin password is NOT hardcoded here anymore — it lives in the
+// "Config" sheet tab and is checked server-side (action:'adminLogin').
+// This keeps it out of the page's own source code, which anyone can view.
 
 // ---- Backend: Google Apps Script Web App, deployed with "Anyone" access.
 // Replace this with your own deployment URL before publishing/sharing the
@@ -304,7 +316,7 @@ function todayLocalDateStr(){
 }
 
 let DATA = { events: [], users: {}, comments: [] };
-let state = { view:'home', matricula:'', user:null, error:'', adminAuth:false, adminTab:'eventos', loading:true, saving:false, selectedEvent:null };
+let state = { view:'home', matricula:'', user:null, error:'', adminAuth:false, adminPassword:'', adminTab:'eventos', loading:true, saving:false, selectedEvent:null };
 
 // ---- Recovery across a page reload / lost connection while stamping. ----
 // The backend call can fail transiently (network hiccup, Apps Script busy
@@ -764,18 +776,27 @@ function AdminLogin(){
   page.appendChild(pass);
   const err = el('p',{class:'error'});
   page.appendChild(err);
-  const tryLogin = ()=>{
-    if(pass.value === ADMIN_PASSWORD){
+  const loginBtn = el('button',{},['Entrar']);
+  const tryLogin = async ()=>{
+    const attempted = pass.value;
+    if(!attempted) return;
+    err.textContent = '';
+    loginBtn.textContent = 'Verificando…'; loginBtn.disabled = true;
+    try{
+      await apiPost({ action:'adminLogin', password: attempted });
       state.adminAuth = true;
+      state.adminPassword = attempted;
       state.adminTab = 'eventos';
       state.view='admin';
       render();
-    } else {
-      err.textContent = 'Contraseña incorrecta.';
+    }catch(e){
+      err.textContent = e.code === 'unauthorized' ? 'Contraseña incorrecta.' : 'No se pudo conectar. Intenta de nuevo.';
+      loginBtn.textContent = 'Entrar'; loginBtn.disabled = false;
     }
   };
   pass.addEventListener('keydown', e=>{ if(e.key==='Enter') tryLogin(); });
-  page.appendChild(el('button',{onClick: tryLogin},['Entrar']));
+  loginBtn.addEventListener('click', tryLogin);
+  page.appendChild(loginBtn);
   page.appendChild(el('p',{class:'hint'},['Solicita la contraseña a Mesa Directiva.']));
   page.appendChild(el('button',{class:'link-btn', onClick:()=>{state.view='home'; render();}},['← Volver']));
   book.appendChild(page);
@@ -791,10 +812,12 @@ function AdminView(){
   const btnEv = el('button',{class: state.adminTab==='eventos'?'':'inactive'},['Eventos']);
   const btnDb = el('button',{class: state.adminTab==='db'?'':'inactive'},['Base de datos']);
   const btnCm = el('button',{class: state.adminTab==='comentarios'?'':'inactive'},['Comentarios']);
+  const btnSt = el('button',{class: state.adminTab==='estadisticas'?'':'inactive'},['Estadísticas']);
   btnEv.addEventListener('click', ()=>{state.adminTab='eventos'; render();});
   btnDb.addEventListener('click', ()=>{state.adminTab='db'; render();});
   btnCm.addEventListener('click', ()=>{state.adminTab='comentarios'; render();});
-  tabs.appendChild(btnEv); tabs.appendChild(btnDb); tabs.appendChild(btnCm);
+  btnSt.addEventListener('click', ()=>{state.adminTab='estadisticas'; render();});
+  tabs.appendChild(btnEv); tabs.appendChild(btnDb); tabs.appendChild(btnCm); tabs.appendChild(btnSt);
   page.appendChild(tabs);
 
   const content = el('div',{id:'admin-content'});
@@ -857,7 +880,7 @@ function AdminView(){
     saveBtn.addEventListener('click', async ()=>{
       saveBtn.textContent = 'Guardando…'; saveBtn.disabled = true;
       try{
-        DATA = await apiPost({ action:'adminSaveEvents', password: ADMIN_PASSWORD, events: state._editEvents });
+        DATA = await apiPost({ action:'adminSaveEvents', password: state.adminPassword, events: state._editEvents });
         state._editEvents = null;
         showToast('Eventos actualizados.');
         render();
@@ -869,11 +892,13 @@ function AdminView(){
     content.appendChild(saveBtn);
   } else if(state.adminTab==='db'){
     renderAdminDb(content);
-  } else {
+  } else if(state.adminTab==='comentarios'){
     renderAdminComments(content);
+  } else {
+    renderAdminStats(content);
   }
 
-  page.appendChild(el('button',{class:'link-btn', onClick:()=>{state.view='home'; state.adminAuth=false; state._editEvents=null; render();}},['← Cerrar sesión']));
+  page.appendChild(el('button',{class:'link-btn', onClick:()=>{state.view='home'; state.adminAuth=false; state.adminPassword=''; state._editEvents=null; render();}},['← Cerrar sesión']));
   book.appendChild(page);
   return book;
 }
@@ -932,6 +957,75 @@ function renderAdminComments(content){
     table.appendChild(tr);
   });
   content.appendChild(table);
+}
+
+function renderAdminStats(content){
+  const events = DATA.events;
+  const users = Object.values(DATA.users);
+  const totalUsers = users.length;
+  const totalBadges = users.reduce((sum,u)=> sum + (u.badges?.length||0), 0);
+
+  const summary = el('div',{class:'stat-summary-row'});
+  [
+    ['Estudiantes registrados', totalUsers],
+    ['Sellos otorgados', totalBadges],
+    ['Eventos activos', events.length]
+  ].forEach(([label, value])=>{
+    summary.appendChild(el('div',{class:'stat-tile'},[
+      el('b',{},[String(value)]),
+      el('span',{},[label])
+    ]));
+  });
+  content.appendChild(summary);
+
+  if(events.length===0){
+    content.appendChild(el('p',{class:'empty-note'},['Aún no hay eventos para mostrar estadísticas.']));
+    return;
+  }
+
+  // Asistencia por evento (número de estudiantes con sello), de mayor a menor.
+  const counts = events.map(ev=>({
+    ev,
+    count: users.reduce((n,u)=> n + ((u.badges||[]).some(b=>b.eventId===ev.id) ? 1 : 0), 0)
+  })).sort((a,b)=> b.count - a.count);
+  const maxCount = Math.max(1, ...counts.map(c=>c.count));
+
+  content.appendChild(el('label',{},['Asistencia por evento']));
+  const list = el('div',{class:'stat-bar-list'});
+  counts.forEach(({ev,count})=>{
+    const pct = totalUsers>0 ? Math.round((count/totalUsers)*100) : 0;
+    const row = el('div',{class:'stat-bar-row'});
+    row.appendChild(el('div',{class:'stat-bar-label'},[ev.name || '(sin nombre)']));
+    const track = el('div',{class:'stat-bar-track'});
+    track.appendChild(el('div',{class:'stat-bar-fill', style:`width:${Math.round((count/maxCount)*100)}%;`}));
+    row.appendChild(track);
+    row.appendChild(el('div',{class:'stat-bar-count'},[totalUsers>0 ? `${count} (${pct}%)` : String(count)]));
+    list.appendChild(row);
+  });
+  content.appendChild(list);
+
+  // Comentarios por evento — útil para ver dónde hay más retroalimentación
+  // registrada, no solo asistencia.
+  const commentCounts = {};
+  DATA.comments.forEach(c=>{ commentCounts[c.eventId] = (commentCounts[c.eventId]||0) + 1; });
+  const withComments = events.filter(ev => commentCounts[ev.id]);
+  if(withComments.length){
+    content.appendChild(el('div',{class:'divider'}));
+    content.appendChild(el('label',{},['Comentarios por evento']));
+    const list2 = el('div',{class:'stat-bar-list'});
+    const maxC = Math.max(1, ...withComments.map(ev=>commentCounts[ev.id]));
+    withComments.sort((a,b)=> commentCounts[b.id]-commentCounts[a.id]).forEach(ev=>{
+      const c = commentCounts[ev.id];
+      const row = el('div',{class:'stat-bar-row'});
+      row.appendChild(el('div',{class:'stat-bar-label'},[ev.name || '(sin nombre)']));
+      const track = el('div',{class:'stat-bar-track'});
+      track.appendChild(el('div',{class:'stat-bar-fill', style:`width:${Math.round((c/maxC)*100)}%;background:var(--green-deep);`}));
+      row.appendChild(track);
+      row.appendChild(el('div',{class:'stat-bar-count'},[String(c)]));
+      list2.appendChild(row);
+    });
+    content.appendChild(list2);
+  }
 }
 
 function csvText(users){
