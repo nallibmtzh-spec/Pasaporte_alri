@@ -182,6 +182,8 @@
   .stat-bar-track{flex:1;height:10px;background:var(--paper-line);border-radius:5px;overflow:hidden;}
   .stat-bar-fill{height:100%;background:var(--blue);border-radius:5px;}
   .stat-bar-count{width:56px;flex:none;font-size:10.5px;text-align:right;color:var(--ink-soft);}
+  .stat-event-block{display:flex;flex-direction:column;}
+  .stat-bar-sub{font-size:9.5px;color:var(--ink-soft);margin:3px 0 0;padding-left:2px;line-height:1.4;}
 </style>
 </head>
 <body>
@@ -959,6 +961,28 @@ function renderAdminComments(content){
   content.appendChild(table);
 }
 
+// ---- small stats helpers, shared by every breakdown below ----
+
+// {a:3,b:7,c:1} -> [['b',7],['a',3],['c',1]] capped at n entries.
+function topEntries_(counts, n){
+  return Object.entries(counts).sort((a,b)=> b[1]-a[1]).slice(0, n);
+}
+
+// Appends one "label ---bar--- count" row to `list` and returns it, so
+// callers can attach an extra sub-line (e.g. top carreras) underneath.
+function appendBarRow_(list, label, count, maxVal, countText, colorVar){
+  const row = el('div',{class:'stat-bar-row'});
+  row.appendChild(el('div',{class:'stat-bar-label'},[label]));
+  const track = el('div',{class:'stat-bar-track'});
+  const fill = el('div',{class:'stat-bar-fill', style:`width:${Math.round((count/maxVal)*100)}%;`});
+  if(colorVar) fill.style.background = colorVar;
+  track.appendChild(fill);
+  row.appendChild(track);
+  row.appendChild(el('div',{class:'stat-bar-count'},[countText]));
+  list.appendChild(row);
+  return row;
+}
+
 function renderAdminStats(content){
   const events = DATA.events;
   const users = Object.values(DATA.users);
@@ -978,29 +1002,57 @@ function renderAdminStats(content){
   });
   content.appendChild(summary);
 
+  // Carreras más representadas entre TODOS los estudiantes registrados
+  // (no solo quienes ya tienen sellos) — una foto general de quién
+  // integra la comunidad de ALRI, más allá de la asistencia a un evento.
+  if(totalUsers > 0){
+    const carreraTotals = {};
+    users.forEach(u=>{
+      const c = u.carrera || 'Sin especificar';
+      carreraTotals[c] = (carreraTotals[c]||0) + 1;
+    });
+    const topCarrerasOverall = topEntries_(carreraTotals, 6);
+    if(topCarrerasOverall.length){
+      content.appendChild(el('label',{},['Carreras más representadas (todos los registrados)']));
+      const listC = el('div',{class:'stat-bar-list'});
+      const maxCT = Math.max(1, ...topCarrerasOverall.map(([,n])=>n));
+      topCarrerasOverall.forEach(([carrera,n])=>{
+        appendBarRow_(listC, carrera, n, maxCT, String(n), 'var(--gold)');
+      });
+      content.appendChild(listC);
+      content.appendChild(el('div',{class:'divider'}));
+    }
+  }
+
   if(events.length===0){
     content.appendChild(el('p',{class:'empty-note'},['Aún no hay eventos para mostrar estadísticas.']));
     return;
   }
 
-  // Asistencia por evento (número de estudiantes con sello), de mayor a menor.
-  const counts = events.map(ev=>({
-    ev,
-    count: users.reduce((n,u)=> n + ((u.badges||[]).some(b=>b.eventId===ev.id) ? 1 : 0), 0)
-  })).sort((a,b)=> b.count - a.count);
+  // Asistencia por evento (número de estudiantes con sello), de mayor a
+  // menor, con las 3 carreras que más se presentaron a cada uno.
+  const counts = events.map(ev=>{
+    const attendees = users.filter(u => (u.badges||[]).some(b=>b.eventId===ev.id));
+    const carreraCounts = {};
+    attendees.forEach(u=>{
+      const c = u.carrera || 'Sin especificar';
+      carreraCounts[c] = (carreraCounts[c]||0) + 1;
+    });
+    return { ev, count: attendees.length, topCarreras: topEntries_(carreraCounts, 3) };
+  }).sort((a,b)=> b.count - a.count);
   const maxCount = Math.max(1, ...counts.map(c=>c.count));
 
   content.appendChild(el('label',{},['Asistencia por evento']));
   const list = el('div',{class:'stat-bar-list'});
-  counts.forEach(({ev,count})=>{
+  counts.forEach(({ev,count,topCarreras})=>{
     const pct = totalUsers>0 ? Math.round((count/totalUsers)*100) : 0;
-    const row = el('div',{class:'stat-bar-row'});
-    row.appendChild(el('div',{class:'stat-bar-label'},[ev.name || '(sin nombre)']));
-    const track = el('div',{class:'stat-bar-track'});
-    track.appendChild(el('div',{class:'stat-bar-fill', style:`width:${Math.round((count/maxCount)*100)}%;`}));
-    row.appendChild(track);
-    row.appendChild(el('div',{class:'stat-bar-count'},[totalUsers>0 ? `${count} (${pct}%)` : String(count)]));
-    list.appendChild(row);
+    const block = el('div',{class:'stat-event-block'});
+    appendBarRow_(block, ev.name || '(sin nombre)', count, maxCount, totalUsers>0 ? `${count} (${pct}%)` : String(count));
+    if(topCarreras.length){
+      const subText = topCarreras.map(([c,n])=>`${c} (${n})`).join(', ');
+      block.appendChild(el('div',{class:'stat-bar-sub'},['Principales carreras: '+subText]));
+    }
+    list.appendChild(block);
   });
   content.appendChild(list);
 
@@ -1015,14 +1067,7 @@ function renderAdminStats(content){
     const list2 = el('div',{class:'stat-bar-list'});
     const maxC = Math.max(1, ...withComments.map(ev=>commentCounts[ev.id]));
     withComments.sort((a,b)=> commentCounts[b.id]-commentCounts[a.id]).forEach(ev=>{
-      const c = commentCounts[ev.id];
-      const row = el('div',{class:'stat-bar-row'});
-      row.appendChild(el('div',{class:'stat-bar-label'},[ev.name || '(sin nombre)']));
-      const track = el('div',{class:'stat-bar-track'});
-      track.appendChild(el('div',{class:'stat-bar-fill', style:`width:${Math.round((c/maxC)*100)}%;background:var(--green-deep);`}));
-      row.appendChild(track);
-      row.appendChild(el('div',{class:'stat-bar-count'},[String(c)]));
-      list2.appendChild(row);
+      appendBarRow_(list2, ev.name || '(sin nombre)', commentCounts[ev.id], maxC, String(commentCounts[ev.id]), 'var(--green-deep)');
     });
     content.appendChild(list2);
   }
